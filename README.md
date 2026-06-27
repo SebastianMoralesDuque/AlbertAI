@@ -51,7 +51,7 @@ Abrir http://localhost:5173
 
 | Layer | Stack |
 |-------|-------|
-| Backend | FastAPI, SQLAlchemy (async), Alembic, LangGraph, Gemini 2.0 Flash |
+| Backend | FastAPI, SQLAlchemy (async), Alembic, LangGraph, Gemini 3.1 Flash Lite |
 | Database | PostgreSQL 16 + pgvector (vector embeddings) |
 | Auth | JWT (python-jose), bcrypt, GitHub OAuth |
 | Frontend | React 19, TypeScript, Tailwind v4, Vite |
