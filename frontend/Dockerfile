@@ -2,9 +2,10 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 
 COPY package.json ./
+ENV COREPACK_ENABLE_STRICT=0
 RUN pnpm install
 
 COPY . .
