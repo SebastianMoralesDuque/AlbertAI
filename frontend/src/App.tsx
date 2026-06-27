@@ -1,12 +1,18 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import LoginPage from './pages/LoginPage'
+import RegisterPage from './pages/RegisterPage'
 import AuthCallback from './pages/AuthCallback'
+import CoursesPage from './pages/CoursesPage'
+import CourseCreatePage from './pages/CourseCreatePage'
+import CourseDetailPage from './pages/CourseDetailPage'
+import LessonPage from './pages/LessonPage'
 import UserProfileModal from './components/UserProfileModal'
 
 function Dashboard() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [mounted, setMounted] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
 
@@ -32,7 +38,10 @@ function Dashboard() {
               <span className="font-semibold text-lg tracking-tight">AprendizajeAI</span>
             </div>
             <div className="flex items-center gap-6">
-              <button className="text-sm text-zinc-400 hover:text-white transition-colors">
+              <button
+                onClick={() => navigate('/courses')}
+                className="text-sm text-zinc-400 hover:text-white transition-colors"
+              >
                 Mis Cursos
               </button>
               <button className="text-sm text-zinc-400 hover:text-white transition-colors">
@@ -79,47 +88,18 @@ function Dashboard() {
             </p>
           </div>
 
-          {/* Stats Grid */}
-          <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 mb-16 transition-all duration-1000 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
-            <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-6 hover:bg-white/[0.04] transition-colors group">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-zinc-500 text-sm font-medium">Cursos Activos</span>
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-              </div>
-              <div className="text-4xl font-bold tracking-tight mb-1">0</div>
-              <p className="text-zinc-600 text-sm">Creá tu primer curso para empezar</p>
-            </div>
-
-            <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-6 hover:bg-white/[0.04] transition-colors group">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-zinc-500 text-sm font-medium">Racha Actual</span>
-                <svg className="w-4 h-4 text-amber-500" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M12.395 2.553a1 1 0 00-1.45-.385c-.345.23-.614.558-.822.88-.214.33-.403.713-.57 1.116-.334.804-.614 1.768-.84 2.734a31.365 31.365 0 00-.613 3.58 2.64 2.64 0 01-.945-1.067c-.328-.68-.398-1.534-.398-2.654A1 1 0 005.05 6.05 6.981 6.981 0 003 11a7 7 0 1011.95-4.95c-.592-.591-.98-.985-1.348-1.467-.363-.476-.724-1.063-1.207-2.03zM12.12 15.12A3 3 0 017 13s.879.5 2.5.5c0-1 .5-4 1.25-4.5.5 1 .786 1.293 1.371 1.879A2.99 2.99 0 0113 13a2.99 2.99 0 01-.879 2.121z" />
-                </svg>
-              </div>
-              <div className="text-4xl font-bold tracking-tight mb-1">0</div>
-              <p className="text-zinc-600 text-sm">días consecutivos estudiando</p>
-            </div>
-
-            <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-6 hover:bg-white/[0.04] transition-colors group">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-zinc-500 text-sm font-medium">Progreso Total</span>
-                <div className="w-4 h-4 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full" />
-              </div>
-              <div className="text-4xl font-bold tracking-tight mb-1">0%</div>
-              <p className="text-zinc-600 text-sm">de conocimiento acumulado</p>
-            </div>
-          </div>
-
           {/* Quick Actions */}
-          <div className={`transition-all duration-1000 delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
+          <div className={`transition-all duration-1000 delay-200 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}`}>
             <div className="flex items-center gap-2 mb-6">
               <div className="h-1 w-12 bg-cyan-500 rounded-full" />
               <span className="text-cyan-500 text-sm font-medium tracking-wide uppercase">Acciones Rápidas</span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <button className="group relative bg-gradient-to-br from-amber-500 to-orange-600 text-black font-semibold py-5 px-8 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(245,158,11,0.3)] hover:scale-[1.02] active:scale-[0.98]">
+              <button
+                onClick={() => navigate('/courses/new')}
+                className="group relative bg-gradient-to-br from-amber-500 to-orange-600 text-black font-semibold py-5 px-8 rounded-2xl transition-all duration-300 hover:shadow-[0_0_40px_rgba(245,158,11,0.3)] hover:scale-[1.02] active:scale-[0.98]"
+              >
                 <div className="flex items-center justify-between">
                   <div className="text-left">
                     <div className="text-lg font-bold mb-1">Crear Nuevo Curso</div>
@@ -131,7 +111,10 @@ function Dashboard() {
                 </div>
               </button>
 
-              <button className="group bg-white/[0.02] border border-white/10 text-white font-semibold py-5 px-8 rounded-2xl transition-all duration-300 hover:bg-white/[0.05] hover:border-white/20">
+              <button
+                onClick={() => navigate('/courses')}
+                className="group bg-white/[0.02] border border-white/10 text-white font-semibold py-5 px-8 rounded-2xl transition-all duration-300 hover:bg-white/[0.05] hover:border-white/20"
+              >
                 <div className="flex items-center justify-between">
                   <div className="text-left">
                     <div className="text-lg font-bold mb-1">Explorar Temas</div>
@@ -200,6 +183,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route
         path="/"
@@ -214,6 +198,38 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courses"
+        element={
+          <ProtectedRoute>
+            <CoursesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courses/new"
+        element={
+          <ProtectedRoute>
+            <CourseCreatePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courses/:id"
+        element={
+          <ProtectedRoute>
+            <CourseDetailPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/lessons/:id"
+        element={
+          <ProtectedRoute>
+            <LessonPage />
           </ProtectedRoute>
         }
       />
