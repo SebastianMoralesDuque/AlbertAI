@@ -44,12 +44,24 @@ export interface QuizQuestion {
   explanation: string
 }
 
+export interface QuestionResult {
+  question_index: number
+  question: string
+  selected_answer: number
+  correct_answer: number
+  is_correct: boolean
+  explanation: string
+}
+
 export interface QuizResult {
   score: number
   passed: boolean
+  attempts: number
+  best_score: number
   concepts_mastered: string[]
   concepts_failed: string[]
   feedback: string
+  question_results: QuestionResult[]
 }
 
 export interface Streak {
@@ -71,4 +83,13 @@ export interface Game {
   content: Record<string, unknown>
   difficulty: number
   created_at: string
+}
+
+export interface LessonProgress {
+  lesson_id: number
+  day_number: number
+  title: string
+  quiz_passed: boolean
+  best_score: number
+  attempts: number
 }

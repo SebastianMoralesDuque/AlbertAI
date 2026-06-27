@@ -9,6 +9,7 @@ export default function LessonPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [lesson, setLesson] = useState<Lesson | null>(null)
+  const [courseId, setCourseId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [phase, setPhase] = useState<Phase>('reading')
@@ -34,15 +35,23 @@ export default function LessonPage() {
       if (!res.ok) throw new Error('Lección no encontrada')
       const data: Lesson = await res.json()
       setLesson(data)
-      // Initialize answers array
-      const numQuestions = data.quiz_data?.questions?.length || 0
-      setAnswers(new Array(numQuestions).fill(-1))
-      setStartTime(Date.now())
+      setCourseId(data.course_id)
+      resetQuiz(data)
     } catch {
       setError('No se pudo cargar la lección')
     } finally {
       setLoading(false)
     }
+  }
+
+  const resetQuiz = (data?: Lesson) => {
+    const l = data || lesson
+    if (!l) return
+    const numQuestions = l.quiz_data?.questions?.length || 0
+    setAnswers(new Array(numQuestions).fill(-1))
+    setResult(null)
+    setQuizError('')
+    setStartTime(Date.now())
   }
 
   const handleStartQuiz = () => {
@@ -59,7 +68,6 @@ export default function LessonPage() {
   }
 
   const handleSubmitQuiz = async () => {
-    // Validate all answered
     const unanswered = answers.findIndex((a) => a === -1)
     if (unanswered !== -1) {
       setQuizError(`Respondé la pregunta ${unanswered + 1} antes de enviar`)
@@ -88,23 +96,36 @@ export default function LessonPage() {
       setResult(data)
       setPhase('result')
 
-      // Also update streak
+      // Update streak in background
       if (lesson) {
         fetch(`${config.API_BASE_URL}/api/streaks/course/${lesson.course_id}/update`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
         }).catch(() => {})
       }
-    } catch {
-      setQuizError('Error al enviar las respuestas')
+    } catch (e: unknown) {
+      setQuizError(e instanceof Error ? e.message : 'Error al enviar las respuestas')
     } finally {
       setSubmitting(false)
     }
   }
 
+  const handleRetry = () => {
+    setPhase('quiz')
+    resetQuiz()
+  }
+
+  const handleNextDay = () => {
+    if (courseId) {
+      navigate(`/courses/${courseId}`)
+    } else {
+      navigate('/courses')
+    }
+  }
+
   const handleBackToCourse = () => {
-    if (lesson) {
-      navigate(`/courses/${lesson.course_id}`)
+    if (courseId) {
+      navigate(`/courses/${courseId}`)
     } else {
       navigate('/courses')
     }
@@ -160,42 +181,51 @@ export default function LessonPage() {
             <span className="text-sm">Leer</span>
           </div>
           <div className="h-px w-8 bg-zinc-700" />
-          <div className={`flex items-center gap-2 ${phase === 'quiz' ? 'text-cyan-500' : phase === 'result' ? 'text-emerald-500' : 'text-zinc-600'}`}>
+          <div className={`flex items-center gap-2 ${phase === 'quiz' ? 'text-cyan-500' : phase === 'result' ? `text-${result?.passed ? 'emerald' : 'amber'}-500` : 'text-zinc-600'}`}>
             <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
               phase === 'quiz' ? 'bg-cyan-500/20 text-cyan-500' :
-              phase === 'result' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-zinc-800 text-zinc-500'
+              phase === 'result' && result?.passed ? 'bg-emerald-500/20 text-emerald-500' :
+              phase === 'result' ? 'bg-amber-500/20 text-amber-500' :
+              'bg-zinc-800 text-zinc-500'
             }`}>2</div>
             <span className="text-sm">Quiz</span>
           </div>
           {phase === 'result' && (
             <>
               <div className="h-px w-8 bg-zinc-700" />
-              <div className="flex items-center gap-2 text-emerald-500">
-                <div className="w-7 h-7 rounded-full bg-emerald-500/20 flex items-center justify-center text-xs font-bold">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+              <div className={`flex items-center gap-2 ${result?.passed ? 'text-emerald-500' : 'text-amber-500'}`}>
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                  result?.passed ? 'bg-emerald-500/20' : 'bg-amber-500/20'
+                }`}>
+                  {result?.passed ? (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  )}
                 </div>
-                <span className="text-sm">Resultado</span>
+                <span className="text-sm">{result?.passed ? 'Aprobado' : 'A repasar'}</span>
               </div>
             </>
           )}
         </div>
 
-        {/* Reading Phase */}
+        {/* ══════ READING PHASE ══════ */}
         {phase === 'reading' && (
           <>
-            {/* Lesson header */}
             <div className="flex items-center gap-2 mb-2">
               <div className="h-1 w-12 bg-amber-500 rounded-full" />
               <span className="text-amber-500 text-sm font-medium tracking-wide uppercase">
-                Día {lesson.day_number} · {lesson.estimated_minutes} min
+                Día {lesson.day_number} · {lesson.estimated_minutes} min ·{' '}
+                {lesson.lesson_type === 'theory' ? 'Teoría' : lesson.lesson_type === 'practice' ? 'Práctica' : 'Repaso'}
               </span>
             </div>
 
             <h1 className="text-3xl font-bold tracking-tight mb-6">{lesson.title}</h1>
 
-            {/* Concepts */}
             {lesson.concepts?.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-8">
                 {lesson.concepts.map((concept) => (
@@ -209,11 +239,9 @@ export default function LessonPage() {
               </div>
             )}
 
-            {/* Content */}
             <div className="prose prose-invert max-w-none mb-10">
               {lesson.content.split('\n').map((paragraph, i) => {
                 if (!paragraph.trim()) return null
-                // Detect markdown headers
                 if (paragraph.startsWith('## ')) {
                   return <h2 key={i} className="text-xl font-bold mt-8 mb-3 text-white">{paragraph.replace('## ', '')}</h2>
                 }
@@ -223,14 +251,13 @@ export default function LessonPage() {
                 if (paragraph.startsWith('- ')) {
                   return <li key={i} className="text-zinc-300 ml-4 mb-1 list-disc">{paragraph.replace('- ', '')}</li>
                 }
-                if (paragraph.startsWith('1.') || paragraph.startsWith('2.') || paragraph.startsWith('3.') || paragraph.startsWith('4.') || paragraph.startsWith('5.') || paragraph.startsWith('6.') || paragraph.startsWith('7.') || paragraph.startsWith('8.') || paragraph.startsWith('9.') || paragraph.startsWith('0.')) {
+                if (/^\d+\./.test(paragraph)) {
                   return <li key={i} className="text-zinc-300 ml-4 mb-1 list-decimal">{paragraph}</li>
                 }
                 return <p key={i} className="text-zinc-300 mb-4 leading-relaxed">{paragraph}</p>
               })}
             </div>
 
-            {/* Start quiz button */}
             {questions.length > 0 && (
               <div className="border-t border-white/5 pt-8">
                 <button
@@ -244,7 +271,7 @@ export default function LessonPage() {
           </>
         )}
 
-        {/* Quiz Phase */}
+        {/* ══════ QUIZ PHASE ══════ */}
         {phase === 'quiz' && (
           <>
             <div className="flex items-center gap-2 mb-2">
@@ -304,21 +331,28 @@ export default function LessonPage() {
               disabled={submitting || !allAnswered}
               className="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-semibold py-4 px-6 rounded-xl hover:shadow-[0_0_30px_rgba(16,185,129,0.25)] transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {submitting ? 'Enviando...' : allAnswered ? 'Enviar respuestas' : `Respondé todas las preguntas (${answers.filter(a => a !== -1).length}/${questions.length})`}
+              {submitting
+                ? 'Enviando...'
+                : allAnswered
+                  ? 'Enviar respuestas'
+                  : `Respondé todas (${answers.filter(a => a !== -1).length}/${questions.length})`
+              }
             </button>
           </>
         )}
 
-        {/* Result Phase */}
+        {/* ══════ RESULT PHASE ══════ */}
         {phase === 'result' && result && (
           <>
             <div className="flex items-center gap-2 mb-2">
-              <div className="h-1 w-12 bg-emerald-500 rounded-full" />
-              <span className="text-emerald-500 text-sm font-medium tracking-wide uppercase">Resultado</span>
+              <div className={`h-1 w-12 ${result.passed ? 'bg-emerald-500' : 'bg-amber-500'} rounded-full`} />
+              <span className={`text-sm font-medium tracking-wide uppercase ${result.passed ? 'text-emerald-500' : 'text-amber-500'}`}>
+                Resultado {result.attempts > 1 ? `· Intento #${result.attempts}` : ''}
+              </span>
             </div>
 
             {/* Score card */}
-            <div className={`rounded-2xl p-8 text-center mb-8 border ${
+            <div className={`rounded-2xl p-8 text-center mb-6 border ${
               result.passed
                 ? 'bg-emerald-500/5 border-emerald-500/20'
                 : 'bg-amber-500/5 border-amber-500/20'
@@ -328,15 +362,67 @@ export default function LessonPage() {
               }`}>
                 {Math.round(result.score * 100)}%
               </div>
+              {result.attempts > 1 && result.best_score > result.score && (
+                <div className="text-sm text-zinc-500 mb-1">Mejor puntaje: {Math.round(result.best_score * 100)}%</div>
+              )}
               <p className={`text-lg font-medium ${result.passed ? 'text-emerald-400' : 'text-amber-400'}`}>
                 {result.passed ? '¡Aprobado!' : 'Necesitás repasar'}
               </p>
               <p className="text-zinc-400 text-sm mt-2">{result.feedback}</p>
             </div>
 
+            {/* Per-question results */}
+            {result.question_results && result.question_results.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-sm font-medium text-zinc-400 mb-4 uppercase tracking-wide">Revisión por pregunta</h3>
+                <div className="space-y-3">
+                  {result.question_results.map((qr) => (
+                    <div
+                      key={qr.question_index}
+                      className={`rounded-xl border p-4 ${
+                        qr.is_correct
+                          ? 'bg-emerald-500/5 border-emerald-500/20'
+                          : 'bg-red-500/5 border-red-500/20'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                          qr.is_correct ? 'bg-emerald-500/20' : 'bg-red-500/20'
+                        }`}>
+                          {qr.is_correct ? (
+                            <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-zinc-200 mb-1">{qr.question}</p>
+                          <div className="text-xs space-y-0.5">
+                            {!qr.is_correct && (
+                              <p className="text-red-400">
+                                Elegiste: <span className="line-through opacity-70">Opción {String.fromCharCode(65 + qr.selected_answer)}</span>
+                              </p>
+                            )}
+                            <p className={qr.is_correct ? 'text-emerald-400' : 'text-emerald-400'}>
+                              Respuesta correcta: Opción {String.fromCharCode(65 + qr.correct_answer)}
+                            </p>
+                            <p className="text-zinc-500 mt-1">{qr.explanation}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Concepts */}
             {result.concepts_mastered.length > 0 && (
-              <div className="mb-6">
+              <div className="mb-4">
                 <h3 className="text-sm font-medium text-emerald-500 mb-2">Conceptos dominados</h3>
                 <div className="flex flex-wrap gap-2">
                   {result.concepts_mastered.map((c) => (
@@ -361,12 +447,27 @@ export default function LessonPage() {
               </div>
             )}
 
-            <button
-              onClick={handleBackToCourse}
-              className="w-full bg-gradient-to-r from-amber-500 to-orange-600 text-black font-semibold py-4 px-6 rounded-xl hover:shadow-[0_0_30px_rgba(245,158,11,0.25)] transition-all duration-300"
-            >
-              Volver al curso
-            </button>
+            {/* Action buttons */}
+            <div className="flex gap-3">
+              {!result.passed && (
+                <button
+                  onClick={handleRetry}
+                  className="flex-1 bg-gradient-to-r from-amber-500 to-orange-600 text-black font-semibold py-4 px-6 rounded-xl hover:shadow-[0_0_30px_rgba(245,158,11,0.25)] transition-all duration-300"
+                >
+                  Reintentar quiz
+                </button>
+              )}
+              <button
+                onClick={result.passed ? handleNextDay : handleBackToCourse}
+                className={`flex-1 font-semibold py-4 px-6 rounded-xl transition-all duration-300 ${
+                  result.passed
+                    ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white hover:shadow-[0_0_30px_rgba(16,185,129,0.25)]'
+                    : 'bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-zinc-300'
+                }`}
+              >
+                {result.passed ? 'Siguiente día →' : 'Volver al curso'}
+              </button>
+            </div>
           </>
         )}
       </div>

@@ -6,7 +6,8 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.course import Course
 from app.models.lesson import Lesson
-from app.schemas.course import CourseCreate, CourseResponse, CourseUpdate
+from app.models.progress import Progress
+from app.schemas.course import CourseCreate, CourseResponse, CourseUpdate, LessonProgressResponse
 from app.schemas.lesson import LessonResponse
 from app.utils.auth import get_current_user
 from app.services.learning_service import generate_lesson_for_course
@@ -129,6 +130,68 @@ async def delete_course(
     await db.commit()
 
 
+@router.get("/{course_id}/progress", response_model=LessonProgressResponse)
+async def get_course_progress(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get progress summary for each lesson in the course."""
+    # Verify course
+    result = await db.execute(
+        select(Course).where(
+            Course.id == course_id,
+            Course.user_id == current_user.id,
+        )
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Curso no encontrado",
+        )
+
+    # Get all lessons
+    result = await db.execute(
+        select(Lesson)
+        .where(Lesson.course_id == course_id)
+        .order_by(Lesson.day_number)
+    )
+    lessons = result.scalars().all()
+
+    items = []
+    for lesson in lessons:
+        # Get all progress records for this lesson
+        prog_result = await db.execute(
+            select(Progress)
+            .where(
+                Progress.user_id == current_user.id,
+                Progress.lesson_id == lesson.id,
+            )
+            .order_by(Progress.created_at.desc())
+        )
+        records = prog_result.scalars().all()
+
+        passed = any(r.quiz_passed for r in records)
+        best_score = max((r.quiz_score for r in records if r.quiz_score is not None), default=0.0)
+        attempts = len(records)
+
+        items.append({
+            "lesson_id": lesson.id,
+            "day_number": lesson.day_number,
+            "title": lesson.title,
+            "quiz_passed": passed,
+            "best_score": best_score,
+            "attempts": attempts,
+        })
+
+    return {
+        "course_id": course_id,
+        "total_lessons": len(lessons),
+        "lessons": items,
+    }
+
+
 @router.post("/{course_id}/generate-lesson", response_model=LessonResponse)
 async def generate_lesson(
     course_id: int,
@@ -155,6 +218,34 @@ async def generate_lesson(
             detail="El curso ya está completo",
         )
 
+    # ── Day-lock: previous lesson must be passed ────────────────────
+    if course.current_day > 1:
+        prev_day = course.current_day - 1
+        result = await db.execute(
+            select(Lesson).where(
+                Lesson.course_id == course.id,
+                Lesson.day_number == prev_day,
+            )
+        )
+        prev_lesson = result.scalar_one_or_none()
+        if prev_lesson:
+            result = await db.execute(
+                select(Progress).where(
+                    Progress.user_id == current_user.id,
+                    Progress.lesson_id == prev_lesson.id,
+                    Progress.quiz_passed == True,
+                ).limit(1)
+            )
+            prev_passed = result.scalar_one_or_none()
+            if not prev_passed:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Primero tenés que aprobar el quiz del Día {prev_day} "
+                        f"antes de pasar al Día {course.current_day}."
+                    ),
+                )
+
     try:
         lesson = await generate_lesson_for_course(course, db)
         if not lesson:
@@ -163,6 +254,8 @@ async def generate_lesson(
                 detail="No se pudo generar la lección",
             )
         return lesson
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

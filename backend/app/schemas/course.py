@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from app.models.course import CourseLevel, CourseStatus
 
 
@@ -35,3 +35,18 @@ class CourseResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LessonProgressItem(BaseModel):
+    lesson_id: int
+    day_number: int
+    title: str
+    quiz_passed: bool
+    best_score: float
+    attempts: int
+
+
+class LessonProgressResponse(BaseModel):
+    course_id: int
+    total_lessons: int
+    lessons: List[LessonProgressItem]

@@ -1,10 +1,11 @@
 """
-Service layer for generating lessons and quizzes using Gemini.
-Connects the LangGraph agent to the database persistence layer.
+Adaptive lesson generation service using Gemini AI.
+Generates personalized lessons based on the student's progress history,
+past mistakes, and mastery level.
 """
 import json
 import re
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -12,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from app.core.config import get_settings
 from app.models.course import Course
 from app.models.lesson import Lesson
+from app.models.progress import Progress
 
 settings = get_settings()
 
@@ -22,89 +24,214 @@ llm = ChatGoogleGenerativeAI(
 )
 
 
+async def get_course_history(course_id: int, db: AsyncSession) -> dict:
+    """Gather the student's full learning history for adaptive prompting.
+
+    Returns dict with:
+      - mastered_concepts: concepts with average pass rate > 70%
+      - failed_concepts: concepts with average pass rate < 70%
+      - recent_scores: last 5 quiz scores
+      - weak_areas: concepts that appear most often in failed lists
+      - total_attempts: total quiz submissions
+    """
+    result = await db.execute(
+        select(Progress)
+        .where(Progress.course_id == course_id)
+        .order_by(Progress.created_at.desc())
+    )
+    records: List[Progress] = result.scalars().all()
+
+    if not records:
+        return {
+            "mastered_concepts": [],
+            "failed_concepts": [],
+            "weak_areas": [],
+            "recent_scores": [],
+            "total_attempts": 0,
+            "best_score": 0.0,
+            "last_score": 0.0,
+        }
+
+    # Aggregate concept mastery
+    concept_stats: dict[str, list[float]] = {}
+    for r in records:
+        for c in (r.concepts_mastered or []):
+            concept_stats.setdefault(c, []).append(1.0)
+        for c in (r.concepts_failed or []):
+            concept_stats.setdefault(c, []).append(0.0)
+
+    mastered = []
+    failed = []
+    weak_counter: dict[str, int] = {}
+
+    for concept, scores in concept_stats.items():
+        avg = sum(scores) / len(scores)
+        if avg >= 0.7:
+            mastered.append(concept)
+        else:
+            failed.append(concept)
+
+    for r in records:
+        for c in (r.concepts_failed or []):
+            weak_counter[c] = weak_counter.get(c, 0) + 1
+
+    weak_areas = sorted(weak_counter, key=weak_counter.get, reverse=True)[:5]
+    recent_scores = [r.quiz_score for r in records[:5] if r.quiz_score is not None]
+    total_attempts = len(records)
+
+    return {
+        "mastered_concepts": mastered,
+        "failed_concepts": failed,
+        "weak_areas": weak_areas,
+        "recent_scores": recent_scores,
+        "total_attempts": total_attempts,
+        "best_score": max(r.quiz_score for r in records if r.quiz_score is not None) if records else 0.0,
+        "last_score": records[0].quiz_score if records[0].quiz_score is not None else 0.0,
+    }
+
+
+def _extract_concepts_from_markdown(markdown: str) -> list[str]:
+    """Extract concept/topic words from the lesson content."""
+    # Look for a "Conceptos clave" or "Temas" section
+    lines = markdown.split("\n")
+    concepts = []
+    capture = False
+    for line in lines:
+        stripped = line.strip().lower()
+        if any(kw in stripped for kw in ["conceptos clave", "temas de la", "palabras clave", "vocabulario"]):
+            capture = True
+            continue
+        if capture:
+            if stripped.startswith("##") or stripped.startswith("---"):
+                break
+            # Extract words after bullet points or numbers
+            cleaned = re.sub(r"^[\s\-*\d.]+", "", stripped).strip()
+            if cleaned and len(cleaned) > 2:
+                concepts.append(cleaned)
+    if not concepts:
+        # Fallback: extract from first heading and key nouns
+        for line in lines:
+            if line.startswith("## "):
+                title = line.replace("## ", "").strip()
+                concepts = [title]
+                break
+    return concepts[:5]
+
+
 async def generate_lesson_for_course(
     course: Course,
     db: AsyncSession,
 ) -> Optional[Lesson]:
-    """Generate a new lesson for the given course using Gemini AI.
+    """Generate an ADAPTIVE lesson for the given course using Gemini AI.
 
-    Steps:
-    1. Build a prompt with the course context
-    2. Call Gemini to get lesson content (markdown)
-    3. Call Gemini to get quiz questions (JSON)
-    4. Save the Lesson record to the database
-    5. Update course.current_day
-    6. Return the created lesson
+    The prompt includes the student's full history so Gemini can:
+    - Reinforce concepts the student has failed before
+    - Skip or accelerate concepts already mastered
+    - Adjust difficulty based on past performance
     """
+    # ── Gather student history ──────────────────────────────────────
+    history = await get_course_history(course.id, db)
+
+    # Build the "weak areas" context block for the prompt
+    weak_context = ""
+    if history["weak_areas"]:
+        weak_context = f"""
+- Conceptos que el estudiante HA FALLADO antes (priorizarlos): {', '.join(history['weak_areas'])}
+- Debe reforzar estos conceptos y asegurarte de que los entienda"""
+
+    if history["mastered_concepts"]:
+        weak_context += f"""
+- Conceptos que YA DOMINA (puede mencionarlos brevemente pero no necesita repetirlos): {', '.join(history['mastered_concepts'])}"""
+
+    if history["recent_scores"]:
+        avg_recent = sum(history["recent_scores"]) / len(history["recent_scores"])
+        trend = "mejorando" if len(history["recent_scores"]) > 1 and history["recent_scores"][0] > history["recent_scores"][-1] else "estable"
+        weak_context += f"""
+- Rendimiento reciente: puntaje promedio {avg_recent:.0%}, tendencia {trend}
+- Dificultad objetivo: {'más accesible' if avg_recent < 0.6 else 'moderada' if avg_recent < 0.8 else 'desafiante'}"""
+
+    level_name = {"beginner": "principiante", "intermediate": "intermedio", "advanced": "avanzado"}.get(course.level, "principiante")
+
     # ── 1. Generate lesson content ──────────────────────────────────
     content_prompt = f"""
 Eres un profesor experto en {course.topic}. Generá una lección educativa en español.
 
-Contexto:
+## Contexto del estudiante
 - Tema: {course.topic}
-- Nivel del estudiante: {course.level} (beginner = principiante, intermediate = intermedio, advanced = avanzado)
+- Nivel: {level_name}
 - Día del curso: {course.current_day} de {course.total_days}
 - Tiempo disponible: {course.daily_minutes} minutos
-- Los conceptos deben ser adecuados para el día {course.current_day} de un curso de {course.total_days} días
+- Intentos de quiz realizados: {history["total_attempts"]}
+{weak_context}
 
-Requisitos:
-1. Título atractivo que empiece con "## " (markdown heading level 2)
-2. Explicación clara y didáctica
-3. Ejemplos prácticos adaptados al nivel
-4. Tips o curiosidades
-5. Extensión: que se pueda leer en {course.daily_minutes} minutos
-6. Respondé SOLO con el contenido markdown, sin introducciones ni despedidas
+## Instrucciones pedagógicas
+1. Empezá con un título atractivo en formato "## Título"
+2. Si el estudiante tiene conceptos fallidos, dedicá una sección a reforzarlos con ejemplos nuevos
+3. Introducí 1 o 2 conceptos NUEvos relacionados con el tema del día
+4. Usá ejemplos prácticos y concretos adaptados al nivel {level_name}
+5. Incluí al menos un ejemplo resuelto paso a paso
+6. Terminá con un resumen de los puntos clave
+7. Extensión: que se pueda leer en {course.daily_minutes} minutos
+8. Respondé SOLO con el contenido markdown, sin introducciones ni despedidas
 
-Formato:
+## Formato
 ## Título de la lección
 
-[contenido de la lección en markdown]
+[contenido en markdown con secciones, ejemplos y resumen]
 """
     content_response = await llm.ainvoke([HumanMessage(content=content_prompt)])
     lesson_markdown = content_response.content.strip()
 
-    # Extract title from first ## heading
+    # Extract title
     title_match = re.search(r"^##\s+(.+)$", lesson_markdown, re.MULTILINE)
     title = title_match.group(1).strip() if title_match else f"Día {course.current_day}: {course.topic}"
-    concepts_match = re.search(r"(?:conceptos?|temas?|palabras clave)[:\s]+(.+)$", lesson_markdown[:500], re.IGNORECASE | re.MULTILINE)
-    concepts = []
-    if concepts_match:
-        raw = concepts_match.group(1)
-        concepts = [c.strip().strip(".*-") for c in re.split(r"[,;]\s*", raw) if c.strip()]
+
+    # Extract concepts
+    concepts = _extract_concepts_from_markdown(lesson_markdown)
+    if not concepts:
+        concepts = [course.topic]
 
     # ── 2. Generate quiz questions ──────────────────────────────────
-    quiz_prompt = f"""
-Generá 5 preguntas de opción múltiple en español para evaluar esta lección:
+    # Make quiz adaptive: if weak areas exist, include questions about them
+    weak_focus = ""
+    if history["weak_areas"]:
+        weak_focus = f"""
+- Incluí AL MENOS 2 preguntas que evalúen los conceptos débiles: {', '.join(history['weak_areas'][:3])}"""
 
-Tema: {course.topic}
-Nivel: {course.level}
-Día: {course.current_day}
+    quiz_prompt = f"""
+Generá 5 preguntas de opción múltiple en español para evaluar esta lección.
+
+## Contexto
+- Tema: {course.topic}
+- Nivel: {level_name}
+- Día: {course.current_day}
+{weak_focus}
 
 Contenido de la lección:
-{lesson_markdown[:2000]}
+{lesson_markdown[:2500]}
 
-Instrucciones:
-- 5 preguntas con 4 opciones cada una
-- La respuesta correcta es el ÍNDICE (0-3) de la opción correcta en el array options
-- Incluí una explicación breve para cada respuesta correcta
-- Dificultad progresiva (las primeras más fáciles)
+## Instrucciones
+- 5 preguntas con 4 opciones cada una (0-3)
+- La respuesta correcta es el ÍNDICE de la opción correcta (0, 1, 2 o 3)
+- Dificultad progresiva: las primeras 2 fáciles, la 3 y 4 intermedias, la 5 más desafiante
+- Cada pregunta debe evaluar un concepto diferente
+- Incluí una explicación DIDÁCTICA de por qué es correcta (no solo "es correcta")
+- Si el estudiante falló conceptos antes, poné preguntas que refuercen esos conceptos
 
-Respondé SOLO con JSON válido, sin markdown ni explicaciones adicionales:
+Respondé SOLO con JSON válido, sin markdown:
 
 {{"questions": [
   {{
     "question": "Pregunta 1",
     "options": ["Opción A", "Opción B", "Opción C", "Opción D"],
     "correct_answer": 0,
-    "explanation": "Por qué es correcta la opción A"
+    "explanation": "Por qué es correcta y por qué las otras no"
   }},
   ...
 ]}}
 """
     quiz_response = await llm.ainvoke([HumanMessage(content=quiz_prompt)])
     raw_quiz = quiz_response.content.strip()
-
-    # Strip markdown code fences if present
     raw_quiz = re.sub(r"^```(?:json)?\s*", "", raw_quiz)
     raw_quiz = re.sub(r"\s*```$", "", raw_quiz)
 
@@ -114,7 +241,6 @@ Respondé SOLO con JSON válido, sin markdown ni explicaciones adicionales:
         if "questions" in parsed:
             quiz_data = parsed
     except json.JSONDecodeError:
-        # Fallback: try to extract JSON object from the text
         json_match = re.search(r"\{.*\}", raw_quiz, re.DOTALL)
         if json_match:
             try:
@@ -124,22 +250,44 @@ Respondé SOLO con JSON válido, sin markdown ni explicaciones adicionales:
             except json.JSONDecodeError:
                 pass
 
+    # If quiz has no questions, generate fallback
+    if not quiz_data["questions"]:
+        quiz_data = {
+            "questions": [
+                {
+                    "question": f"¿Cuál es el concepto principal de la lección {title}?",
+                    "options": [course.topic, "Ninguno", "Todos", "No sé"],
+                    "correct_answer": 0,
+                    "explanation": f"El tema principal de esta lección es {course.topic}."
+                }
+            ]
+        }
+
     # ── 3. Determine lesson type ────────────────────────────────────
     day_mod = (course.current_day - 1) % 3
     lesson_types = ["theory", "practice", "review"]
     lesson_type = lesson_types[day_mod]
 
     # ── 4. Save to database ─────────────────────────────────────────
+    # Calculate adaptive difficulty based on history
+    base_difficulty = 0.3 + (course.current_day / course.total_days) * 0.5
+    if history["best_score"] > 0:
+        # If student is doing well, increase difficulty
+        if history["best_score"] >= 0.9:
+            base_difficulty = min(1.0, base_difficulty + 0.15)
+        elif history["best_score"] <= 0.5:
+            base_difficulty = max(0.1, base_difficulty - 0.15)
+
     lesson = Lesson(
         course_id=course.id,
         day_number=course.current_day,
         title=title,
         content=lesson_markdown,
         lesson_type=lesson_type,
-        concepts=concepts if concepts else [course.topic],
+        concepts=concepts,
         quiz_data=quiz_data,
         estimated_minutes=course.daily_minutes,
-        difficulty=0.3 + (course.current_day / course.total_days) * 0.5,
+        difficulty=round(base_difficulty, 2),
     )
     db.add(lesson)
 

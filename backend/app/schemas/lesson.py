@@ -33,9 +33,21 @@ class QuizSubmission(BaseModel):
     time_spent_seconds: int
 
 
+class QuestionResult(BaseModel):
+    question_index: int
+    question: str
+    selected_answer: int
+    correct_answer: int
+    is_correct: bool
+    explanation: str
+
+
 class QuizResult(BaseModel):
     score: float
     passed: bool
+    attempts: int
+    best_score: float
     concepts_mastered: List[str]
     concepts_failed: List[str]
     feedback: str
+    question_results: List[QuestionResult]

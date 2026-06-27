@@ -7,7 +7,7 @@ from app.models.user import User
 from app.models.course import Course
 from app.models.lesson import Lesson
 from app.models.progress import Progress
-from app.schemas.lesson import LessonResponse, QuizSubmission, QuizResult
+from app.schemas.lesson import LessonResponse, QuizSubmission, QuizResult, QuestionResult
 from app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/lessons", tags=["lessons"])
@@ -19,7 +19,7 @@ async def list_lessons(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Verify course belongs to user
+    """List all lessons for a course."""
     result = await db.execute(
         select(Course).where(
             Course.id == course_id,
@@ -63,7 +63,8 @@ async def submit_quiz(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Get lesson
+    """Submit quiz answers. Supports unlimited retries — keeps best score."""
+    # ── Get lesson ──────────────────────────────────────────────────
     result = await db.execute(select(Lesson).where(Lesson.id == lesson_id))
     lesson = result.scalar_one_or_none()
     if not lesson:
@@ -72,32 +73,76 @@ async def submit_quiz(
             detail="Lección no encontrada",
         )
 
-    # Calculate score
     quiz_data = lesson.quiz_data
     questions = quiz_data.get("questions", [])
-    correct = 0
-    concepts_mastered = []
-    concepts_failed = []
+    if not questions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta lección no tiene preguntas de quiz",
+        )
 
-    for i, answer in enumerate(submission.answers):
-        if i < len(questions):
-            question = questions[i]
-            if answer == question.get("correct_answer"):
-                correct += 1
-                # Add concept to mastered
-                for concept in lesson.concepts:
-                    if concept not in concepts_mastered:
-                        concepts_mastered.append(concept)
-            else:
-                # Add concept to failed
-                for concept in lesson.concepts:
-                    if concept not in concepts_failed:
-                        concepts_failed.append(concept)
+    # ── Validate answers ────────────────────────────────────────────
+    if len(submission.answers) != len(questions):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Se esperaban {len(questions)} respuestas, se recibieron {len(submission.answers)}",
+        )
 
-    score = correct / len(questions) if questions else 0.0
-    passed = score >= 0.7  # 70% to pass
+    # ── Grade ───────────────────────────────────────────────────────
+    correct_count = 0
+    question_results: List[QuestionResult] = []
+    concepts_mastered: List[str] = []
+    concepts_failed: List[str] = []
 
-    # Create progress record
+    for i, (answer_idx, question) in enumerate(zip(submission.answers, questions)):
+        is_correct = answer_idx == question.get("correct_answer")
+        if is_correct:
+            correct_count += 1
+
+        qr = QuestionResult(
+            question_index=i,
+            question=question.get("question", ""),
+            selected_answer=answer_idx,
+            correct_answer=question.get("correct_answer", 0),
+            is_correct=is_correct,
+            explanation=question.get("explanation", ""),
+        )
+        question_results.append(qr)
+
+    score = correct_count / len(questions)
+    passed = score >= 0.7
+
+    # ── Attribute concepts to mastered/failed ───────────────────────
+    # If >= 60% of questions are correct, concepts are "mastered"
+    # This is per-lesson, not per-question, to avoid noise
+    if passed:
+        concepts_mastered = list(lesson.concepts or [])
+    else:
+        concepts_failed = list(lesson.concepts or [])
+
+    # ── Get existing progress or create new ─────────────────────────
+    result = await db.execute(
+        select(Progress).where(
+            Progress.user_id == current_user.id,
+            Progress.lesson_id == lesson_id,
+        ).order_by(Progress.created_at.desc())
+    )
+    existing_progress = result.scalars().all()
+
+    # Count attempts
+    attempts = len(existing_progress) + 1
+    best_score = max((p.quiz_score for p in existing_progress if p.quiz_score is not None), default=0.0)
+    best_score = max(best_score, score)
+
+    # Merge concepts across all attempts
+    all_mastered = set()
+    all_failed = set()
+    for p in existing_progress:
+        all_mastered.update(p.concepts_mastered or [])
+        all_failed.update(p.concepts_failed or [])
+    all_mastered.update(concepts_mastered)
+
+    # ── Save new progress record ────────────────────────────────────
     progress = Progress(
         user_id=current_user.id,
         course_id=lesson.course_id,
@@ -105,22 +150,38 @@ async def submit_quiz(
         quiz_score=score,
         quiz_passed=passed,
         time_spent_minutes=submission.time_spent_seconds // 60,
-        concepts_mastered=concepts_mastered,
-        concepts_failed=concepts_failed,
+        concepts_mastered=list(all_mastered),
+        concepts_failed=list(all_failed),
     )
     db.add(progress)
     await db.commit()
 
-    # Generate feedback
+    # ── Build feedback ──────────────────────────────────────────────
     if passed:
-        feedback = f"¡Excelente! Obtuviste {score:.0%}. Has dominado los conceptos de esta lección."
+        if attempts == 1:
+            feedback = f"¡Excelente! Aprobaste al primer intento con {score:.0%}. Seguí así."
+        else:
+            feedback = f"¡Bien! Aprobaste en tu intento #{attempts} con {score:.0%}. (Mejor puntaje: {best_score:.0%})"
     else:
-        feedback = f"Obtuviste {score:.0%}. Necesitas repasar: {', '.join(concepts_failed)}"
+        wrong_qs = [qr for qr in question_results if not qr.is_correct]
+        topics_to_review = lesson.concepts[:3] if lesson.concepts else []
+        if wrong_qs:
+            feedback = (
+                f"Obtuviste {score:.0%}. Necesitás repasar. "
+                f"Fallaste {len(wrong_qs)} de {len(questions)} preguntas. "
+                f"Revisá los conceptos: {', '.join(topics_to_review)}. "
+                f"¡Intentalo de nuevo!"
+            )
+        else:
+            feedback = f"Obtuviste {score:.0%}. ¡Seguí practicando y volvé a intentar!"
 
     return QuizResult(
         score=score,
         passed=passed,
-        concepts_mastered=concepts_mastered,
-        concepts_failed=concepts_failed,
+        attempts=attempts,
+        best_score=best_score,
+        concepts_mastered=list(all_mastered),
+        concepts_failed=list(all_failed),
         feedback=feedback,
+        question_results=question_results,
     )
