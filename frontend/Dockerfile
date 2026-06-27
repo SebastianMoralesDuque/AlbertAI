@@ -4,8 +4,8 @@ WORKDIR /app
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json ./
+RUN pnpm install
 
 COPY . .
 RUN pnpm build
@@ -18,7 +18,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 5173
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:5173 || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
