@@ -33,3 +33,4 @@ google-generativeai==0.8.4
 # Utilities
 httpx==0.28.1
 python-dateutil==2.9.0.post0
+itsdangerous==2.2.0
