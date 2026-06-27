@@ -5,8 +5,11 @@ from typing import List
 from app.core.database import get_db
 from app.models.user import User
 from app.models.course import Course
+from app.models.lesson import Lesson
 from app.schemas.course import CourseCreate, CourseResponse, CourseUpdate
+from app.schemas.lesson import LessonResponse
 from app.utils.auth import get_current_user
+from app.services.learning_service import generate_lesson_for_course
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -32,6 +35,14 @@ async def create_course(
     db.add(course)
     await db.commit()
     await db.refresh(course)
+
+    # Auto-generate the first lesson
+    try:
+        await generate_lesson_for_course(course, db)
+    except Exception as e:
+        # Log but don't fail — lesson gen can be retried later
+        print(f"[courses] First lesson auto-generation failed: {e}")
+
     return course
 
 
@@ -116,3 +127,44 @@ async def delete_course(
         )
     await db.delete(course)
     await db.commit()
+
+
+@router.post("/{course_id}/generate-lesson", response_model=LessonResponse)
+async def generate_lesson(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a new lesson for this course using Gemini AI."""
+    result = await db.execute(
+        select(Course).where(
+            Course.id == course_id,
+            Course.user_id == current_user.id,
+        )
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Curso no encontrado",
+        )
+
+    if course.current_day > course.total_days:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El curso ya está completo",
+        )
+
+    try:
+        lesson = await generate_lesson_for_course(course, db)
+        if not lesson:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No se pudo generar la lección",
+            )
+        return lesson
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al generar la lección: {str(e)}",
+        )
