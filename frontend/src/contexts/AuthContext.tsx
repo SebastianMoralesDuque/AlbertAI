@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import config from '../config'
 
 interface User {
   id: number
@@ -29,7 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const fetchUser = useCallback(async (token: string) => {
     try {
       console.log('[Auth] fetchUser - token preview:', token.substring(0, 30) + '...')
-      const res = await fetch('/api/auth/me', {
+      const res = await fetch(`${config.API_BASE_URL}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       console.log('[Auth] fetchUser - response status:', res.status)

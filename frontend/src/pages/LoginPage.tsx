@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import config from '../config'
 
 export default function LoginPage() {
   const { login } = useAuth()
@@ -13,7 +14,7 @@ export default function LoginPage() {
     setError('')
     setLoading(true)
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(`${config.API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -32,7 +33,7 @@ export default function LoginPage() {
   }
 
   const handleGithubLogin = () => {
-    window.location.href = '/api/auth/github/login'
+    window.location.href = `${config.API_BASE_URL}/api/auth/github/login`
   }
 
   return (
