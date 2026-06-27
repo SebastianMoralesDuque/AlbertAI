@@ -10,7 +10,9 @@ from app.models.progress import Progress
 from app.schemas.course import CourseCreate, CourseResponse, CourseUpdate, LessonProgressResponse
 from app.schemas.lesson import LessonResponse
 from app.utils.auth import get_current_user
-from app.services.learning_service import generate_lesson_for_course
+from app.services.learning_service import generate_lesson_for_course, get_course_history
+from app.models.streak import Streak
+from app.schemas.learning_profile import LearningProfileResponse, ConceptDetail, LessonProgressItem
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -190,6 +192,118 @@ async def get_course_progress(
         "total_lessons": len(lessons),
         "lessons": items,
     }
+
+
+@router.get("/{course_id}/learning-profile", response_model=LearningProfileResponse)
+async def get_learning_profile(
+    course_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the full learning profile — what the AI agent knows about you."""
+
+    # Verify course
+    result = await db.execute(
+        select(Course).where(
+            Course.id == course_id,
+            Course.user_id == current_user.id,
+        )
+    )
+    course = result.scalar_one_or_none()
+    if not course:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Curso no encontrado",
+        )
+
+    # Get streak data
+    result = await db.execute(
+        select(Streak).where(
+            Streak.user_id == current_user.id,
+            Streak.course_id == course_id,
+        )
+    )
+    streak = result.scalar_one_or_none()
+
+    # Get learning history (what the agent uses)
+    history = await get_course_history(course_id, db)
+
+    # Get per-lesson progress
+    result = await db.execute(
+        select(Lesson)
+        .where(Lesson.course_id == course_id)
+        .order_by(Lesson.day_number)
+    )
+    lessons = result.scalars().all()
+
+    lessons_items = []
+    concept_stats: dict[str, dict] = {}
+
+    for lesson in lessons:
+        prog_result = await db.execute(
+            select(Progress)
+            .where(
+                Progress.user_id == current_user.id,
+                Progress.lesson_id == lesson.id,
+            )
+            .order_by(Progress.created_at.desc())
+        )
+        records = prog_result.scalars().all()
+
+        passed = any(r.quiz_passed for r in records)
+        best_score = max((r.quiz_score for r in records if r.quiz_score is not None), default=0.0)
+
+        # Aggregate concept stats per lesson
+        for r in records:
+            for c in (r.concepts_mastered or []):
+                s = concept_stats.setdefault(c, {"mastered": 0, "failed": 0})
+                s["mastered"] += 1
+            for c in (r.concepts_failed or []):
+                s = concept_stats.setdefault(c, {"mastered": 0, "failed": 0})
+                s["failed"] += 1
+
+        lessons_items.append(LessonProgressItem(
+            lesson_id=lesson.id,
+            day_number=lesson.day_number,
+            title=lesson.title,
+            lesson_type=lesson.lesson_type,
+            quiz_passed=passed,
+            best_score=best_score,
+            attempts=len(records),
+        ))
+
+    # Build concept details
+    concept_details = [
+        ConceptDetail(
+            name=name,
+            times_mastered=s["mastered"],
+            times_failed=s["failed"],
+            mastery_rate=s["mastered"] / max(1, s["mastered"] + s["failed"]),
+        )
+        for name, s in sorted(concept_stats.items(),
+                              key=lambda x: x[1]["mastered"] / max(1, x[1]["mastered"] + x[1]["failed"]))
+    ]
+
+    return LearningProfileResponse(
+        course_id=course.id,
+        course_title=course.title,
+        course_topic=course.topic,
+        course_level=course.level,
+        current_day=course.current_day,
+        total_days=course.total_days,
+        current_streak=streak.current_streak if streak else 0,
+        longest_streak=streak.longest_streak if streak else 0,
+        total_days_studied=streak.total_days_studied if streak else 0,
+        mastered_concepts=history["mastered_concepts"],
+        failed_concepts=history["failed_concepts"],
+        weak_areas=history["weak_areas"],
+        recent_scores=history["recent_scores"],
+        total_quiz_attempts=history["total_attempts"],
+        best_overall_score=history["best_score"],
+        last_quiz_score=history["last_score"],
+        concept_details=concept_details,
+        lessons=lessons_items,
+    )
 
 
 @router.post("/{course_id}/generate-lesson", response_model=LessonResponse)

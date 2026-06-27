@@ -8,6 +8,7 @@ import CoursesPage from './pages/CoursesPage'
 import CourseCreatePage from './pages/CourseCreatePage'
 import CourseDetailPage from './pages/CourseDetailPage'
 import LessonPage from './pages/LessonPage'
+import LearningProfilePage from './pages/LearningProfilePage'
 import UserProfileModal from './components/UserProfileModal'
 
 function Dashboard() {
@@ -230,6 +231,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <LessonPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courses/:id/learning-profile"
+        element={
+          <ProtectedRoute>
+            <LearningProfilePage />
           </ProtectedRoute>
         }
       />

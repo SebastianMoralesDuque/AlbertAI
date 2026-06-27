@@ -9,6 +9,7 @@ from app.models.lesson import Lesson
 from app.models.progress import Progress
 from app.schemas.lesson import LessonResponse, QuizSubmission, QuizResult, QuestionResult
 from app.utils.auth import get_current_user
+from app.services.concept_service import record_quiz_outcome
 
 router = APIRouter(prefix="/lessons", tags=["lessons"])
 
@@ -141,6 +142,11 @@ async def submit_quiz(
         all_mastered.update(p.concepts_mastered or [])
         all_failed.update(p.concepts_failed or [])
     all_mastered.update(concepts_mastered)
+
+    # ── Update agent's structured memory (user_concepts) ────────────
+    all_lesson_concepts = list(lesson.concepts or [])
+    if all_lesson_concepts:
+        await record_quiz_outcome(db, current_user.id, all_lesson_concepts, passed)
 
     # ── Save new progress record ────────────────────────────────────
     progress = Progress(

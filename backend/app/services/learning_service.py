@@ -14,6 +14,8 @@ from app.core.config import get_settings
 from app.models.course import Course
 from app.models.lesson import Lesson
 from app.models.progress import Progress
+from app.models.concept import UserConcept
+from app.services.concept_service import get_user_mastery_profile, ensure_concept
 
 settings = get_settings()
 
@@ -27,13 +29,33 @@ llm = ChatGoogleGenerativeAI(
 async def get_course_history(course_id: int, db: AsyncSession) -> dict:
     """Gather the student's full learning history for adaptive prompting.
 
+    Uses the structured memory (user_concepts) for concept mastery data
+    — O(1) per concept, no full table scan. Falls back to scanning
+    progress records if user_concepts hasn't been populated yet.
+
     Returns dict with:
-      - mastered_concepts: concepts with average pass rate > 70%
-      - failed_concepts: concepts with average pass rate < 70%
-      - recent_scores: last 5 quiz scores
+      - mastered_concepts: concepts with mastery >= 70%
+      - failed_concepts: concepts with mastery < 70%
       - weak_areas: concepts that appear most often in failed lists
+      - recent_scores: last 5 quiz scores
       - total_attempts: total quiz submissions
+      - best_score: max quiz score across all attempts
+      - last_score: most recent quiz score
     """
+    # Get course to find user_id
+    result = await db.execute(select(Course).where(Course.id == course_id))
+    course = result.scalar_one_or_none()
+    user_id = course.user_id if course else None
+
+    # ── Concept mastery from structured memory (user_concepts) ─────
+    if user_id:
+        concept_profile = await get_user_mastery_profile(db, user_id)
+        has_memory = concept_profile["concept_count"] > 0
+    else:
+        concept_profile = None
+        has_memory = False
+
+    # ── Score data from progress (always needed, but with LIMIT) ────
     result = await db.execute(
         select(Progress)
         .where(Progress.course_id == course_id)
@@ -41,6 +63,24 @@ async def get_course_history(course_id: int, db: AsyncSession) -> dict:
     )
     records: List[Progress] = result.scalars().all()
 
+    recent_scores = [r.quiz_score for r in records[:5] if r.quiz_score is not None]
+    total_attempts = len(records)
+    best_score = max((r.quiz_score for r in records if r.quiz_score is not None), default=0.0)
+    last_score = records[0].quiz_score if records and records[0].quiz_score is not None else 0.0
+
+    # ── If structured memory exists, use it — no concept scan needed ──
+    if has_memory and concept_profile:
+        return {
+            "mastered_concepts": concept_profile["mastered_concepts"],
+            "failed_concepts": concept_profile["failed_concepts"],
+            "weak_areas": concept_profile["weak_areas"],
+            "recent_scores": recent_scores,
+            "total_attempts": total_attempts,
+            "best_score": best_score,
+            "last_score": last_score,
+        }
+
+    # ── Fallback: scan progress records (backward compat) ────────────
     if not records:
         return {
             "mastered_concepts": [],
@@ -52,7 +92,6 @@ async def get_course_history(course_id: int, db: AsyncSession) -> dict:
             "last_score": 0.0,
         }
 
-    # Aggregate concept mastery
     concept_stats: dict[str, list[float]] = {}
     for r in records:
         for c in (r.concepts_mastered or []):
@@ -76,8 +115,6 @@ async def get_course_history(course_id: int, db: AsyncSession) -> dict:
             weak_counter[c] = weak_counter.get(c, 0) + 1
 
     weak_areas = sorted(weak_counter, key=weak_counter.get, reverse=True)[:5]
-    recent_scores = [r.quiz_score for r in records[:5] if r.quiz_score is not None]
-    total_attempts = len(records)
 
     return {
         "mastered_concepts": mastered,
@@ -85,8 +122,8 @@ async def get_course_history(course_id: int, db: AsyncSession) -> dict:
         "weak_areas": weak_areas,
         "recent_scores": recent_scores,
         "total_attempts": total_attempts,
-        "best_score": max(r.quiz_score for r in records if r.quiz_score is not None) if records else 0.0,
-        "last_score": records[0].quiz_score if records[0].quiz_score is not None else 0.0,
+        "best_score": best_score,
+        "last_score": last_score,
     }
 
 
@@ -190,6 +227,10 @@ Eres un profesor experto en {course.topic}. Generá una lección educativa en es
     concepts = _extract_concepts_from_markdown(lesson_markdown)
     if not concepts:
         concepts = [course.topic]
+
+    # Normalize concepts into the structured memory (concepts table)
+    for concept_name in concepts:
+        await ensure_concept(db, concept_name)
 
     # ── 2. Generate quiz questions ──────────────────────────────────
     # Make quiz adaptive: if weak areas exist, include questions about them

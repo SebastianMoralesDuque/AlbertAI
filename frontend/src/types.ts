@@ -93,3 +93,41 @@ export interface LessonProgress {
   best_score: number
   attempts: number
 }
+
+export interface LearningProfileLesson {
+  lesson_id: number
+  day_number: number
+  title: string
+  lesson_type: string
+  quiz_passed: boolean
+  best_score: number
+  attempts: number
+}
+
+export interface ConceptDetail {
+  name: string
+  times_mastered: number
+  times_failed: number
+  mastery_rate: number
+}
+
+export interface LearningProfile {
+  course_id: number
+  course_title: string
+  course_topic: string
+  course_level: string
+  current_day: number
+  total_days: number
+  current_streak: number
+  longest_streak: number
+  total_days_studied: number
+  mastered_concepts: string[]
+  failed_concepts: string[]
+  weak_areas: string[]
+  recent_scores: number[]
+  total_quiz_attempts: number
+  best_overall_score: number
+  last_quiz_score: number
+  concept_details: ConceptDetail[]
+  lessons: LearningProfileLesson[]
+}

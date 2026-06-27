@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import config from '../config'
 import type { Lesson, QuizResult } from '../types'
 
@@ -240,22 +242,63 @@ export default function LessonPage() {
             )}
 
             <div className="prose prose-invert max-w-none mb-10">
-              {lesson.content.split('\n').map((paragraph, i) => {
-                if (!paragraph.trim()) return null
-                if (paragraph.startsWith('## ')) {
-                  return <h2 key={i} className="text-xl font-bold mt-8 mb-3 text-white">{paragraph.replace('## ', '')}</h2>
-                }
-                if (paragraph.startsWith('### ')) {
-                  return <h3 key={i} className="text-lg font-semibold mt-6 mb-2 text-zinc-200">{paragraph.replace('### ', '')}</h3>
-                }
-                if (paragraph.startsWith('- ')) {
-                  return <li key={i} className="text-zinc-300 ml-4 mb-1 list-disc">{paragraph.replace('- ', '')}</li>
-                }
-                if (/^\d+\./.test(paragraph)) {
-                  return <li key={i} className="text-zinc-300 ml-4 mb-1 list-decimal">{paragraph}</li>
-                }
-                return <p key={i} className="text-zinc-300 mb-4 leading-relaxed">{paragraph}</p>
-              })}
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h2: ({ children }) => (
+                    <h2 className="text-xl font-bold mt-8 mb-3 text-white">{children}</h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-lg font-semibold mt-6 mb-2 text-zinc-200">{children}</h3>
+                  ),
+                  p: ({ children }) => (
+                    <p className="text-zinc-300 mb-4 leading-relaxed">{children}</p>
+                  ),
+                  ul: ({ children }) => (
+                    <ul className="list-disc ml-5 mb-4 space-y-1 text-zinc-300">{children}</ul>
+                  ),
+                  ol: ({ children }) => (
+                    <ol className="list-decimal ml-5 mb-4 space-y-1 text-zinc-300">{children}</ol>
+                  ),
+                  li: ({ children }) => (
+                    <li className="text-zinc-300">{children}</li>
+                  ),
+                  strong: ({ children }) => (
+                    <strong className="font-bold text-white">{children}</strong>
+                  ),
+                  em: ({ children }) => (
+                    <em className="italic text-zinc-200">{children}</em>
+                  ),
+                  code: ({ children }) => (
+                    <code className="bg-white/5 text-amber-300 px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>
+                  ),
+                  pre: ({ children }) => (
+                    <pre className="bg-white/5 border border-white/10 rounded-xl p-4 mb-4 overflow-x-auto text-sm font-mono text-zinc-200">{children}</pre>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-2 border-amber-500/30 pl-4 mb-4 text-zinc-400 italic">{children}</blockquote>
+                  ),
+                  hr: () => (
+                    <hr className="border-white/5 my-6" />
+                  ),
+                  a: ({ href, children }) => (
+                    <a href={href} className="text-amber-400 hover:text-amber-300 underline" target="_blank" rel="noopener noreferrer">{children}</a>
+                  ),
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto mb-4">
+                      <table className="w-full border-collapse text-sm text-zinc-300">{children}</table>
+                    </div>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-white/10 bg-white/5 px-3 py-2 text-left font-semibold text-white">{children}</th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-white/10 px-3 py-2">{children}</td>
+                  ),
+                }}
+              >
+                {lesson.content}
+              </ReactMarkdown>
             </div>
 
             {questions.length > 0 && (
