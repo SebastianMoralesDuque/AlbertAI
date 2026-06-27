@@ -20,7 +20,7 @@ authlib==1.4.1
 httpx==0.28.1
 
 # Validation & Settings
-pydantic==2.10.4
+pydantic[email]==2.10.4
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 
