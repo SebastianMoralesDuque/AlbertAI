@@ -41,6 +41,7 @@ export default function CourseDetailPage() {
   const [error, setError] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState('')
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (id) fetchData()
@@ -96,6 +97,28 @@ export default function CourseDetailPage() {
       setGenError(e instanceof Error ? e.message : 'Error al generar la lección')
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!course) return
+    const confirmed = window.confirm(
+      `¿Eliminar el curso "${course.title}"?\n\nEsta acción no se puede deshacer. Se eliminarán todas las lecciones y progreso asociado.`
+    )
+    if (!confirmed) return
+
+    setDeleting(true)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`${config.API_BASE_URL}/api/courses/${course.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('Error al eliminar')
+      navigate('/courses')
+    } catch {
+      setError('No se pudo eliminar el curso')
+      setDeleting(false)
     }
   }
 
@@ -161,6 +184,28 @@ export default function CourseDetailPage() {
             <h1 className="text-4xl font-bold tracking-tight mb-2">{course.title}</h1>
             <p className="text-zinc-400">{course.description || course.topic}</p>
           </div>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-red-500/20 text-red-400 hover:bg-red-500/10 hover:border-red-500/30 transition-all disabled:opacity-50 text-sm font-medium flex-shrink-0"
+          >
+            {deleting ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Eliminando...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Eliminar
+              </>
+            )}
+          </button>
         </div>
 
         {/* Learning profile button */}

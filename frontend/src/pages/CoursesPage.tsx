@@ -20,6 +20,7 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   useEffect(() => {
     fetchCourses()
@@ -39,6 +40,27 @@ export default function CoursesPage() {
       setError('No se pudieron cargar tus cursos')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleDelete = async (e: React.MouseEvent, courseId: number, courseTitle: string) => {
+    e.stopPropagation()
+    const confirmed = window.confirm(`¿Eliminar el curso "${courseTitle}"?\n\nEsta acción no se puede deshacer. Se eliminarán todas las lecciones y progreso asociado.`)
+    if (!confirmed) return
+
+    setDeletingId(courseId)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`${config.API_BASE_URL}/api/courses/${courseId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('Error al eliminar')
+      setCourses((prev) => prev.filter((c) => c.id !== courseId))
+    } catch {
+      setError('No se pudo eliminar el curso')
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -119,8 +141,27 @@ export default function CoursesPage() {
               <button
                 key={course.id}
                 onClick={() => navigate(`/courses/${course.id}`)}
-                className="bg-white/[0.02] border border-white/5 rounded-2xl p-6 text-left hover:bg-white/[0.04] hover:border-white/10 transition-all group"
+                className="bg-white/[0.02] border border-white/5 rounded-2xl p-6 text-left hover:bg-white/[0.04] hover:border-white/10 transition-all group relative"
               >
+                {/* Delete button */}
+                <button
+                  onClick={(e) => handleDelete(e, course.id, course.title)}
+                  disabled={deletingId === course.id}
+                  className="absolute top-3 right-3 p-2 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-400 text-zinc-600 transition-all disabled:opacity-50"
+                  title="Eliminar curso"
+                >
+                  {deletingId === course.id ? (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  )}
+                </button>
+
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${
